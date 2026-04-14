@@ -37,7 +37,7 @@
 
 ### Внешние системы
 
-- **Geoscan Pioneer** — дрон с камерой и MAVLink-связью
+- **Geoscan Pioneer Mini** — дрон с камерой и MAVLink-связью
 - **Jinja2** — шаблонизатор Flask
 
 ---
