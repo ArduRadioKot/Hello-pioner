@@ -11,6 +11,7 @@ from dronecontroller import (
     get_current_waypoint_index, get_current_node_index,
     get_qr_results, set_qr_save_path, get_camera_frame_jpeg, get_camera_frame_with_qr,
 )
+from robot_controller import RobotController, send_route_to_robot
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
@@ -197,6 +198,86 @@ def api_graph_post():
         with open(GRAPH_PATH, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
         return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/robot/send-route', methods=['POST'])
+def api_robot_send_route():
+    """Отправить маршрут на наземного робота (ESP32)"""
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({'error': 'Ожидается JSON'}), 400
+
+        robot_ip = data.get('robot_ip')
+        route = data.get('route', [])
+        meta = data.get('meta', {})
+
+        if not robot_ip:
+            return jsonify({'error': 'robot_ip обязателен'}), 400
+        if not route:
+            return jsonify({'error': 'Маршрут пуст'}), 400
+
+        success, message = send_route_to_robot(robot_ip, route, meta)
+
+        if success:
+            return jsonify({'ok': True, 'message': message})
+        else:
+            return jsonify({'error': message}), 500
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/robot/status', methods=['POST'])
+def api_robot_status():
+    """Получить статус наземного робота"""
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({'error': 'Ожидается JSON'}), 400
+
+        robot_ip = data.get('robot_ip')
+        if not robot_ip:
+            return jsonify({'error': 'robot_ip обязателен'}), 400
+
+        controller = RobotController(robot_ip)
+        status = controller.get_status()
+
+        if status:
+            return jsonify({'ok': True, 'status': status})
+        else:
+            return jsonify({'error': 'Робот недоступен'}), 500
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/robot/test-connection', methods=['POST'])
+def api_robot_test_connection():
+    """Проверить соединение с роботом"""
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({'error': 'Ожидается JSON'}), 400
+
+        robot_ip = data.get('robot_ip')
+        if not robot_ip:
+            return jsonify({'error': 'robot_ip обязателен'}), 400
+
+        controller = RobotController(robot_ip)
+        status = controller.get_status()
+
+        if status:
+            return jsonify({
+                'ok': True,
+                'message': 'Робот доступен',
+                'status': status
+            })
+        else:
+            return jsonify({'ok': False, 'message': 'Робот недоступен'}), 500
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
