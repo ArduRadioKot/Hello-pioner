@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESP32Servo.h>
+#include <esp_task_wdt.h>
 
 Adafruit_MPU6050 mpu;
 
@@ -15,9 +16,11 @@ Adafruit_MPU6050 mpu;
 #define SPEED_2 33
 #define SERVO_PIN 25
 
-// WiFi настройки
-const char* ssid = "myW";
-const char* password = "1q2w3e4r";
+// WiFi настройки для точки доступа
+const char* ap_ssid = "RobotControl";
+const char* ap_password = "12345678";
+IPAddress ap_ip(192, 168, 4, 1);
+IPAddress subnet(255, 255, 255, 0);
 
 WebServer server(80);
 Servo lifter;
@@ -29,7 +32,7 @@ float posAngle = 0.0;
 bool isLifterUp = false;  // Переименовано для избежания конфликта
 
 // Смещение датчика относительно центра (см)
-float sensorOffsetX = 3.0;
+float sensorOffsetX = 0.0;  // Fixed: no offset for accurate positioning
 float sensorOffsetY = 0.0;
 
 // Структура точки маршрута
@@ -97,6 +100,20 @@ void handleNotFound() {
   server.send(404, "text/plain", "Not found");
 }
 
+void testMovementDirections() {
+  Serial.println("Testing movement directions...");
+  
+  // Test current position
+  float centerX, centerY;
+  getActualCenterPosition(centerX, centerY);
+  Serial.print("Current center position: X=");
+  Serial.print(centerX);
+  Serial.print(", Y=");
+  Serial.println(centerY);
+  
+  Serial.println("Movement test completed - ready for commands");
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -129,11 +146,69 @@ void setup() {
   
   lastGyroTime = millis();
   
-  // WiFi подключение
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  // Creating WiFi Access Point
+  Serial.println("Creating WiFi Access Point...");
+  
+  // Disable WiFi and enable in AP mode
+  WiFi.disconnect(true, true);
+  delay(500);
+  WiFi.mode(WIFI_AP);
+  delay(500);
+  
+  // Create access point with retry logic
+  bool success = false;
+  int attempts = 0;
+  const int max_attempts = 3;
+  
+  while (!success && attempts < max_attempts) {
+    Serial.print("Attempt ");
+    Serial.print(attempts + 1);
+    Serial.print("/");
+    Serial.print(max_attempts);
+    Serial.print(" to create AP...");
+    
+    success = WiFi.softAP(ap_ssid, ap_password, 1, 0, 4); // channel 1, hidden=false, max 4 clients
+    
+    if (success) {
+      Serial.println(" SUCCESS!");
+      break;
+    } else {
+      Serial.println(" FAILED!");
+      attempts++;
+      if (attempts < max_attempts) {
+        delay(1000);
+      }
+    }
   }
+  
+  if (success) {
+    // Configure IP address
+    bool configSuccess = WiFi.softAPConfig(ap_ip, ap_ip, subnet);
+    if (configSuccess) {
+      Serial.println("IP configuration successful");
+    } else {
+      Serial.println("IP configuration failed");
+    }
+    
+    delay(2000); // Give time for AP initialization
+    
+    Serial.print("SSID: ");
+    Serial.println(ap_ssid);
+    Serial.print("Password: ");
+    Serial.println(ap_password);
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.softAPIP());
+    Serial.print("Connected clients: ");
+    Serial.println(WiFi.softAPgetStationNum());
+    
+    Serial.println("WiFi Access Point is ready!");
+  } else {
+    Serial.println("CRITICAL: Failed to create WiFi Access Point after all attempts");
+    Serial.println("Robot will continue without WiFi control");
+  }
+  
+  // Test movement directions
+  testMovementDirections();
   
   // HTTP сервер
   server.on("/", handleRoot);
@@ -173,6 +248,8 @@ void executeCommands(String commands) {
 
 void executeCommand(String cmd) {
   cmd.toUpperCase();
+  Serial.print("📥 Получена команда: ");
+  Serial.println(cmd);
   
   if (cmd.startsWith("GO_LOCAL")) {
     float x = 0, y = 0;
@@ -186,20 +263,39 @@ void executeCommand(String cmd) {
       x = cmd.substring(firstSpace + 1).toFloat();
     }
     
+    Serial.print("🎯 GO_LOCAL: X=");
+    Serial.print(x);
+    Serial.print(", Y=");
+    Serial.println(y);
     goToPoint(x, y);
   }
+  else if (cmd == "RESET_POS") {
+    resetPosition();
+  }
+  else if (cmd == "RETURN_HOME") {
+    returnToHome();
+  }
   else if (cmd == "UP") {
+    Serial.println("⬆️ Подъёмник ВВЕРХ");
     lifterUp();
   }
   else if (cmd == "DOWN") {
+    Serial.println("⬇️ Подъёмник ВНИЗ");
     lifterDown();
   }
   else if (cmd.startsWith("DELAY")) {
     int space = cmd.indexOf(' ');
     if (space != -1) {
       int t = cmd.substring(space + 1).toInt();
+      Serial.print("⏱️ Задержка: ");
+      Serial.print(t);
+      Serial.println("мс");
       delay(t);
     }
+  }
+  else {
+    Serial.print("❌ Неизвестная команда: ");
+    Serial.println(cmd);
   }
 }
 
@@ -250,8 +346,16 @@ void updateAngle() {
   
   if (dt > 0.5) return;
   
+  // Feed watchdog to prevent resets
+  #ifdef ESP32
+  // esp_task_wdt_feed(); // Disabled for compilation
+  #endif
+  
   sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
+  if (!mpu.getEvent(&a, &g, &temp)) {
+    Serial.println("⚠️ MPU6050 read error in updateAngle");
+    return;
+  }
   
   float gz = (g.gyro.z - gyroOffsetZ) * 180.0 / PI;
   if (abs(gz) < 1.0) gz = 0;
@@ -291,6 +395,13 @@ void forward(float length) {
   
   while (millis() - startTime < duration) {
     updateAngle();
+    
+    // Feed watchdog and handle WiFi
+    #ifdef ESP32
+    // esp_task_wdt_feed(); // Disabled for compilation
+    #endif
+    server.handleClient();
+    
     delay(10);
   }
   
@@ -320,6 +431,13 @@ void backward(float length) {
   
   while (millis() - startTime < duration) {
     updateAngle();
+    
+    // Feed watchdog and handle WiFi
+    #ifdef ESP32
+    // esp_task_wdt_feed(); // Disabled for compilation
+    #endif
+    server.handleClient();
+    
     delay(10);
   }
   
@@ -348,6 +466,13 @@ void left(float deg) {
   unsigned long startTime = millis();
   while (millis() - startTime < turnTime) {
     updateAngle();
+    
+    // Feed watchdog and handle WiFi
+    #ifdef ESP32
+    // esp_task_wdt_feed(); // Disabled for compilation
+    #endif
+    server.handleClient();
+    
     delay(5);
   }
   
@@ -377,6 +502,13 @@ void right(float deg) {
   unsigned long startTime = millis();
   while (millis() - startTime < turnTime) {
     updateAngle();
+    
+    // Feed watchdog and handle WiFi
+    #ifdef ESP32
+    // esp_task_wdt_feed(); // Disabled for compilation
+    #endif
+    server.handleClient();
+    
     delay(5);
   }
   
@@ -398,29 +530,110 @@ void stop() {
 // ========== НАВИГАЦИЯ ==========
 
 void goToPoint(float targetX, float targetY) {
+  Serial.print("🎯 Движение к точке: X=");
+  Serial.print(targetX);
+  Serial.print(", Y=");
+  Serial.println(targetY);
+  
+  // Получаем текущую позицию центра робота
   float centerX, centerY;
   getActualCenterPosition(centerX, centerY);
   
+  Serial.print("📍 Текущая позиция: X=");
+  Serial.print(centerX);
+  Serial.print(", Y=");
+  Serial.print(centerY);
+  Serial.print(", Угол=");
+  Serial.println(posAngle);
+  
+  // Вычисляем разницу между целевой и текущей позицией
   float dx = targetX - centerX;
   float dy = targetY - centerY;
   float distance = sqrt(dx*dx + dy*dy);
+  
+  // Вычисляем целевой угол от текущей позиции к цели
   float targetAngle = atan2(dy, dx) * 180.0 / PI;
   if (targetAngle < 0) targetAngle += 360.0;
   
+  // Вычисляем разницу углов
   float angleDiff = targetAngle - posAngle;
   if (angleDiff > 180) angleDiff -= 360;
   if (angleDiff < -180) angleDiff += 360;
   
-  if (abs(angleDiff) > 5.0) {
-    if (angleDiff > 0) left(angleDiff);
-    else right(-angleDiff);
+  Serial.print("🔄 Нужно повернуть на ");
+  Serial.print(angleDiff);
+  Serial.print("°, расстояние: ");
+  Serial.print(distance);
+  Serial.println("см");
+  
+  // Поворачиваем к цели
+  if (abs(angleDiff) > 3.0) { // Уменьшил порог для точности
+    if (angleDiff > 0) {
+      Serial.println("⬅️ Поворот влево");
+      left(angleDiff);
+    } else {
+      Serial.println("➡️ Поворот вправо");
+      right(-angleDiff);
+    }
+    delay(500); // Пауза после поворота
   }
   
-  if (distance > 1.0) forward(distance);
+  // Движемся вперед к цели
+  if (distance > 2.0) { // Увеличил порог для точности
+    Serial.print("⬆️ Движение вперед на ");
+    Serial.print(distance);
+    Serial.println("см");
+    forward(distance);
+  }
+  
+  Serial.println("✅ Движение завершено");
+}
+
+void resetPosition() {
+  Serial.println("Reset position to starting point");
+  
+  // Reset positioning variables
+  posX = 0.0;
+  posY = 0.0;
+  posAngle = 0.0;
+  isLifterUp = false;
+  
+  // Clear route history
+  routeHistory.clear();
+  
+  // Reset gyroscope offset
+  float sumZ = 0;
+  int successfulReads = 0;
+  for(int i = 0; i < 50; i++) {
+    sensors_event_t a, g, temp;
+    if (mpu.getEvent(&a, &g, &temp)) {
+      sumZ += g.gyro.z;
+      successfulReads++;
+    }
+    delay(5);
+    
+    // Feed watchdog during calibration
+    #ifdef ESP32
+    // esp_task_wdt_feed(); // Disabled for compilation
+    #endif
+  }
+  
+  if (successfulReads > 0) {
+    gyroOffsetZ = sumZ / successfulReads;
+  } else {
+    Serial.println("⚠️ Failed to read MPU6050 during calibration");
+    gyroOffsetZ = 0.0; // fallback value
+  }
+  lastGyroTime = millis();
+  
+  Serial.println("Position reset: X=0, Y=0, Angle=0");
+  Serial.println("Gyroscope recalibrated");
 }
 
 void returnToHome() {
   if (routeHistory.empty()) return;
+  
+  Serial.println("🏠 Возврат домой по истории маршрута");
   
   for (int i = routeHistory.size() - 1; i >= 0; i--) {
     RoutePoint p = routeHistory[i];

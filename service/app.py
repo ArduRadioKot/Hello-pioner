@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from flask import Flask, render_template, send_from_directory, request, jsonify, Response
@@ -11,7 +12,7 @@ from dronecontroller import (
     get_current_waypoint_index, get_current_node_index,
     get_qr_results, set_qr_save_path, get_camera_frame_jpeg, get_camera_frame_with_qr,
 )
-from robot_controller import RobotController, send_route_to_robot
+from robotcontroller import send_robot_to_node, get_robot_position, reset_robot_position, return_robot_to_start
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 
@@ -50,6 +51,11 @@ def index():
 @app.route('/new-task')
 def new_task():
     return render_template('newtask.html')
+
+
+@app.route('/robot-programmer')
+def robot_programmer():
+    return render_template('robot_programmer.html')
 
 
 @app.route('/api/analyze-topology', methods=['POST'])
@@ -148,6 +154,39 @@ def api_drone_status():
     })
 
 
+@app.route('/api/robot/send', methods=['POST'])
+def api_robot_send():
+    _ensure_data_dir()
+    if not GRAPH_PATH.exists():
+        return jsonify({'error': 'Граф не построен'}), 400
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({'error': 'Ожидается JSON'}), 400
+        target_node_id = data.get('target_node_id')
+        if not target_node_id:
+            return jsonify({'error': 'Укажите target_node_id'}), 400
+        start_node_id = data.get('start_node_id')
+        base_url = data.get('base_url', '192.168.4.1')
+        return_to_start = data.get('return_to_start', False)
+        wait_at_target_sec = int(data.get('wait_at_target_sec', 0))
+        wait_at_target_sec = max(0, min(60, wait_at_target_sec))
+        with open(GRAPH_PATH, 'r', encoding='utf-8') as f:
+            graph = json.load(f)
+        ok, msg = send_robot_to_node(
+            graph, target_node_id,
+            start_node_id=start_node_id,
+            base_url=base_url,
+            return_to_start=return_to_start,
+            wait_at_target_sec=wait_at_target_sec,
+        )
+        if ok:
+            return jsonify({'ok': True, 'message': msg})
+        return jsonify({'error': msg}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/nodes/qr')
 def api_nodes_qr():
     result = {}
@@ -184,13 +223,54 @@ def api_drone_frame_with_qr():
     return jsonify(data)
 
 
+@app.route('/api/robot/position', methods=['GET'])
+def api_robot_position():
+    """Получает текущую позицию робота."""
+    try:
+        base_url = request.args.get('base_url', '192.168.4.1')
+        position, err = get_robot_position(base_url)
+        if err:
+            return jsonify({'error': err}), 400
+        return jsonify({'position': position})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/robot/reset-position', methods=['POST'])
+def api_robot_reset_position():
+    """Сбрасывает позицию робота в исходную точку."""
+    try:
+        data = request.get_json() or {}
+        base_url = data.get('base_url', '192.168.4.1')
+        ok, msg = reset_robot_position(base_url)
+        if ok:
+            return jsonify({'ok': True, 'message': msg})
+        return jsonify({'error': msg}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/robot/return-to-start', methods=['POST'])
+def api_robot_return_to_start():
+    """Отправляет робота в исходную точку."""
+    try:
+        data = request.get_json() or {}
+        base_url = data.get('base_url', '192.168.4.1')
+        ok, msg = return_robot_to_start(base_url)
+        if ok:
+            return jsonify({'ok': True, 'message': msg})
+        return jsonify({'error': msg}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/graph', methods=['POST'])
 def api_graph_post():
     _ensure_data_dir()
     try:
         data = request.get_json()
         if data is None:
-            return jsonify({'error': 'Ожидается JSON'}), 400
+            return jsonify({'error': 'Expected JSON'}), 400
         nodes = data.get('nodes', [])
         edges = data.get('edges', [])
         meta = data.get('meta')
@@ -202,82 +282,239 @@ def api_graph_post():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/robot/send-route', methods=['POST'])
-def api_robot_send_route():
-    """Отправить маршрут на наземного робота (ESP32)"""
+ROBOT_PROGRAMS_PATH = DATA_DIR / 'robot_programs.json'
+
+@app.route('/api/robot/programs', methods=['GET'])
+def api_robot_programs_get():
+    """Get all saved robot programs."""
+    _ensure_data_dir()
+    if not ROBOT_PROGRAMS_PATH.exists():
+        return jsonify({'programs': []})
     try:
-        data = request.get_json()
-        if data is None:
-            return jsonify({'error': 'Ожидается JSON'}), 400
-
-        robot_ip = data.get('robot_ip')
-        route = data.get('route', [])
-        meta = data.get('meta', {})
-
-        if not robot_ip:
-            return jsonify({'error': 'robot_ip обязателен'}), 400
-        if not route:
-            return jsonify({'error': 'Маршрут пуст'}), 400
-
-        success, message = send_route_to_robot(robot_ip, route, meta)
-
-        if success:
-            return jsonify({'ok': True, 'message': message})
-        else:
-            return jsonify({'error': message}), 500
-
+        with open(ROBOT_PROGRAMS_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return jsonify(data)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/robot/status', methods=['POST'])
-def api_robot_status():
-    """Получить статус наземного робота"""
+@app.route('/api/robot/programs', methods=['POST'])
+def api_robot_programs_save():
+    """Save a robot program."""
+    _ensure_data_dir()
     try:
         data = request.get_json()
         if data is None:
-            return jsonify({'error': 'Ожидается JSON'}), 400
-
-        robot_ip = data.get('robot_ip')
-        if not robot_ip:
-            return jsonify({'error': 'robot_ip обязателен'}), 400
-
-        controller = RobotController(robot_ip)
-        status = controller.get_status()
-
-        if status:
-            return jsonify({'ok': True, 'status': status})
-        else:
-            return jsonify({'error': 'Робот недоступен'}), 500
-
+            return jsonify({'error': 'Expected JSON'}), 400
+        
+        programs = []
+        if ROBOT_PROGRAMS_PATH.exists():
+            try:
+                with open(ROBOT_PROGRAMS_PATH, 'r', encoding='utf-8') as f:
+                    programs = json.load(f)
+            except:
+                programs = []
+        
+        program = {
+            'id': len(programs) + 1,
+            'name': data.get('name', f'Program {len(programs) + 1}'),
+            'start_node': data.get('start_node'),
+            'actions': data.get('actions', []),
+            'created_at': json.dumps({'timestamp': int(time.time())}),
+            'status': 'saved'
+        }
+        
+        programs.append(program)
+        
+        with open(ROBOT_PROGRAMS_PATH, 'w', encoding='utf-8') as f:
+            json.dump({'programs': programs}, f, ensure_ascii=False, indent=2)
+        
+        return jsonify({'ok': True, 'program': program})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/robot/test-connection', methods=['POST'])
-def api_robot_test_connection():
-    """Проверить соединение с роботом"""
+@app.route('/api/robot/execute-current-program', methods=['POST'])
+def api_robot_execute_current_program():
+    """Execute current program without saving."""
     try:
         data = request.get_json()
         if data is None:
-            return jsonify({'error': 'Ожидается JSON'}), 400
+            return jsonify({'error': 'Expected JSON'}), 400
+        
+        actions = data.get('actions', [])
+        start_node = data.get('start_node')
+        base_url = data.get('base_url', '192.168.4.1')
+        
+        if not actions:
+            return jsonify({'error': 'No actions provided'}), 400
+        
+        # Load graph for navigation
+        if not GRAPH_PATH.exists():
+            return jsonify({'error': 'Graph not loaded'}), 400
+        
+        with open(GRAPH_PATH, 'r', encoding='utf-8') as f:
+            graph = json.load(f)
+        
+        # Execute program actions for robotProgrammm.ino
+        from robotcontroller import _robot_request
+        
+        current_start_node = start_node
+        
+        for action in actions:
+            action_type = action.get('type')
+            target_node = action.get('target_node')
+            lift_action = action.get('lift_action')
+            
+            if action_type == 'move' and target_node:
+                # Find node coordinates
+                node = None
+                for n in graph.get('nodes', []):
+                    if n.get('id') == target_node:
+                        node = n
+                        break
+                
+                if not node:
+                    return jsonify({'error': f'Node {target_node} not found'}), 500
+                
+                # Convert grid coordinates to real coordinates, then to centimeters for GO_LOCAL
+                x_meters = node.get('i', 0) * 0.5  # 0.5m per grid cell
+                y_meters = node.get('j', 0) * 0.5
+                
+                # Convert to centimeters for robotProgrammm.ino
+                x_cm = x_meters * 100
+                y_cm = y_meters * 100
+                
+                _, err = _robot_request(base_url, "/command", {"commands": f"GO_LOCAL {x_cm} {y_cm}"}, method="POST")
+                if err:
+                    return jsonify({'error': f'Failed to move to {target_node}: {err}'}), 500
+                
+                # Update start node for next action
+                current_start_node = target_node
+                
+            elif action_type == 'lift' and lift_action:
+                if lift_action == 'up':
+                    _, err = _robot_request(base_url, "/command", {"commands": "UP"}, method="POST")
+                elif lift_action == 'down':
+                    _, err = _robot_request(base_url, "/command", {"commands": "DOWN"}, method="POST")
+                else:
+                    err = "Invalid lift action"
+                
+                if err:
+                    return jsonify({'error': f'Lift action failed: {err}'}), 500
+        
+        return jsonify({'ok': True, 'message': 'Current program executed successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-        robot_ip = data.get('robot_ip')
-        if not robot_ip:
-            return jsonify({'error': 'robot_ip обязателен'}), 400
 
-        controller = RobotController(robot_ip)
-        status = controller.get_status()
+@app.route('/api/robot/execute-program', methods=['POST'])
+def api_robot_execute_program():
+    """Execute a saved robot program."""
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({'error': 'Expected JSON'}), 400
+        
+        program_id = data.get('program_id')
+        base_url = data.get('base_url', '192.168.4.1')
+        
+        if not program_id:
+            return jsonify({'error': 'program_id required'}), 400
+        
+        # Load program
+        if not ROBOT_PROGRAMS_PATH.exists():
+            return jsonify({'error': 'No programs found'}), 404
+        
+        with open(ROBOT_PROGRAMS_PATH, 'r', encoding='utf-8') as f:
+            programs_data = json.load(f)
+        
+        program = None
+        for p in programs_data.get('programs', []):
+            if p.get('id') == program_id:
+                program = p
+                break
+        
+        if not program:
+            return jsonify({'error': f'Program {program_id} not found'}), 404
+        
+        # Load graph for navigation
+        if not GRAPH_PATH.exists():
+            return jsonify({'error': 'Graph not loaded'}), 400
+        
+        with open(GRAPH_PATH, 'r', encoding='utf-8') as f:
+            graph = json.load(f)
+        
+        # Execute program actions for robotProgrammm.ino
+        from robotcontroller import _robot_request
+        
+        for action in program.get('actions', []):
+            action_type = action.get('type')
+            target_node = action.get('target_node')
+            lift_action = action.get('lift_action')
+            
+            if action_type == 'move' and target_node:
+                # Find node coordinates
+                node = None
+                for n in graph.get('nodes', []):
+                    if n.get('id') == target_node:
+                        node = n
+                        break
+                
+                if not node:
+                    return jsonify({'error': f'Node {target_node} not found'}), 500
+                
+                # Convert grid coordinates to real coordinates, then to centimeters for GO_LOCAL
+                x_meters = node.get('i', 0) * 0.5  # 0.5m per grid cell
+                y_meters = node.get('j', 0) * 0.5
+                
+                # Convert to centimeters for robotProgrammm.ino
+                x_cm = x_meters * 100
+                y_cm = y_meters * 100
+                
+                _, err = _robot_request(base_url, "/command", {"commands": f"GO_LOCAL {x_cm} {y_cm}"}, method="POST")
+                if err:
+                    return jsonify({'error': f'Failed to move to {target_node}: {err}'}), 500
+                
+                # Update start node for next action
+                program['start_node'] = target_node
+                
+            elif action_type == 'lift' and lift_action:
+                if lift_action == 'up':
+                    _, err = _robot_request(base_url, "/command", {"commands": "UP"})
+                elif lift_action == 'down':
+                    _, err = _robot_request(base_url, "/command", {"commands": "DOWN"})
+                else:
+                    err = "Invalid lift action"
+                
+                if err:
+                    return jsonify({'error': f'Lift action failed: {err}'}), 500
+        
+        return jsonify({'ok': True, 'message': 'Program executed successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-        if status:
-            return jsonify({
-                'ok': True,
-                'message': 'Робот доступен',
-                'status': status
-            })
+
+@app.route('/api/robot/lift/<action>', methods=['POST'])
+def api_robot_lift_action(action):
+    """Control robot lift mechanism for robotProgrammm.ino."""
+    try:
+        data = request.get_json() or {}
+        base_url = data.get('base_url', '192.168.4.1')
+        
+        from robotcontroller import _robot_request
+        
+        if action == 'up':
+            _, err = _robot_request(base_url, "/command", {"commands": "UP"}, method="POST")
+        elif action == 'down':
+            _, err = _robot_request(base_url, "/command", {"commands": "DOWN"}, method="POST")
         else:
-            return jsonify({'ok': False, 'message': 'Робот недоступен'}), 500
-
+            return jsonify({'error': 'Invalid action'}), 400
+        
+        if err:
+            return jsonify({'error': err}), 500
+        
+        return jsonify({'ok': True, 'message': f'Lift {action} completed'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

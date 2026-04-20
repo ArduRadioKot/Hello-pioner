@@ -1,0 +1,18 @@
+{
+  "programs": [
+    {
+      "id": 1,
+      "name": "Current Program",
+      "start_node": "0_0",
+      "actions": [
+        {
+          "type": "move",
+          "target_node": "1_0",
+          "description": "Move to node 1_0"
+        }
+      ],
+      "created_at": "{\"timestamp\": 1776435678}",
+      "status": "saved"
+    }
+  ]
+}

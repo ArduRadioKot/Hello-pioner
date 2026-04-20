@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Programmer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .programmer-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+        }
+        
+        .graph-section {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        
+        .program-section {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+        }
+        
+        .graph-canvas {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #ccc;
+            background: #f9f9f9;
+            cursor: crosshair;
+            position: relative;
+        }
+        
+        .node {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #007bff;
+            border: 2px solid #0056b3;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .node.start {
+            background: #28a745;
+            border-color: #1e7e34;
+        }
+        
+        .node.target {
+            background: #dc3545;
+            border-color: #bd2130;
+        }
+        
+        .program-blocks {
+            min-height: 200px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            background: #f8f9fa;
+        }
+        
+        .program-block {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 5px 0;
+            cursor: move;
+        }
+        
+        .program-block.move {
+            border-left: 4px solid #007bff;
+        }
+        
+        .program-block.lift {
+            border-left: 4px solid #28a745;
+        }
+        
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            background: #e9ecef;
+        }
+        
+        .programs-list {
+            margin-top: 20px;
+        }
+        
+        .program-item {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 5px 0;
+            display: flex;
+            justify-content: between;
+            align-items: center;
+        }
+        
+        .lift-controls {
+            margin-top: 15px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #f8f9fa;
+        }
+        
+        .lift-controls h4 {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <a href="{{ url_for('index') }}" class="header-link">
+                <img src="{{ url_for('logo') }}" alt="Logo" class="header-logo">
+                <span class="header-title">Robot Programmer</span>
+            </a>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="programmer-container">
+            <!-- Graph Section -->
+            <section class="graph-section">
+                <h2>Graph & Point Selection</h2>
+                <div class="graph-canvas" id="graphCanvas">
+                    <!-- Graph will be rendered here -->
+                </div>
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="setStartPoint()">Set Start Point</button>
+                    <button class="btn btn-primary" onclick="setTargetPoint()">Set Target Point</button>
+                    <button class="btn btn-secondary" onclick="clearSelection()">Clear Selection</button>
+                </div>
+                <div class="status" id="selectionStatus">
+                    Click "Set Start Point" then click on a node, then "Set Target Point" and click another node.
+                </div>
+                
+                <!-- Lift Controls -->
+                <div class="lift-controls">
+                    <h4>Lift Control</h4>
+                    <div class="controls">
+                        <button class="btn btn-success" onclick="liftUp()">Lift Up</button>
+                        <button class="btn btn-danger" onclick="liftDown()">Lift Down</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Program Section -->
+            <section class="program-section">
+                <h2>Program Builder</h2>
+                <div class="program-blocks" id="programBlocks">
+                    <div style="text-align: center; color: #6c757d; padding: 40px;">
+                        Build your program by selecting points and actions
+                    </div>
+                </div>
+                
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="addMoveAction()">Add Move Action</button>
+                    <button class="btn btn-success" onclick="addLiftUp()">Add Lift Up</button>
+                    <button class="btn btn-danger" onclick="addLiftDown()">Add Lift Down</button>
+                </div>
+                
+                <div class="controls">
+                    <button class="btn btn-primary" onclick="saveProgram()">Save Program</button>
+                    <button class="btn btn-success" onclick="executeCurrentProgram()">Execute Current</button>
+                    <button class="btn btn-warning" onclick="executeProgram()">Save & Execute</button>
+                    <button class="btn btn-secondary" onclick="clearProgram()">Clear Program</button>
+                </div>
+                
+                <!-- Programs List -->
+                <div class="programs-list">
+                    <h3>Saved Programs</h3>
+                    <div id="programsList">
+                        <!-- Programs will be listed here -->
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        let graph = null;
+        let selectedStartNode = null;
+        let selectedTargetNode = null;
+        let currentMode = null; // 'start' or 'target'
+        let program = [];
+        
+        // Load graph on page load
+        window.onload = function() {
+            loadGraph();
+            loadPrograms();
+        };
+        
+        async function loadGraph() {
+            try {
+                const response = await fetch('/api/graph');
+                const data = await response.json();
+                graph = data;
+                renderGraph();
+            } catch (error) {
+                console.error('Error loading graph:', error);
+                document.getElementById('selectionStatus').textContent = 'Error loading graph';
+            }
+        }
+        
+        function renderGraph() {
+            const canvas = document.getElementById('graphCanvas');
+            canvas.innerHTML = '';
+            
+            if (!graph || !graph.nodes || graph.nodes.length === 0) {
+                canvas.innerHTML = '<div style="text-align: center; padding: 100px; color: #6c757d;">No graph loaded. Please analyze topology first.</div>';
+                return;
+            }
+            
+            // Simple grid layout for nodes
+            const cols = Math.ceil(Math.sqrt(graph.nodes.length));
+            const rows = Math.ceil(graph.nodes.length / cols);
+            const cellWidth = canvas.offsetWidth / cols;
+            const cellHeight = 350 / rows;
+            
+            graph.nodes.forEach((node, index) => {
+                const nodeEl = document.createElement('div');
+                nodeEl.className = 'node';
+                nodeEl.textContent = node.id;
+                nodeEl.style.left = (node.i * cellWidth + cellWidth/2 - 15) + 'px';
+                nodeEl.style.top = (node.j * cellHeight + cellHeight/2 - 15) + 'px';
+                nodeEl.dataset.nodeId = node.id;
+                
+                nodeEl.onclick = function() {
+                    handleNodeClick(node);
+                };
+                
+                canvas.appendChild(nodeEl);
+            });
+            
+            // Draw edges (simplified)
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.style.position = 'absolute';
+            svg.style.top = '0';
+            svg.style.left = '0';
+            svg.style.width = '100%';
+            svg.style.height = '400px';
+            svg.style.pointerEvents = 'none';
+            
+            graph.edges.forEach(edge => {
+                const fromNode = graph.nodes.find(n => n.id === edge.from);
+                const toNode = graph.nodes.find(n => n.id === edge.to);
+                
+                if (fromNode && toNode) {
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', fromNode.i * cellWidth + cellWidth/2);
+                    line.setAttribute('y1', fromNode.j * cellHeight + cellHeight/2);
+                    line.setAttribute('x2', toNode.i * cellWidth + cellWidth/2);
+                    line.setAttribute('y2', toNode.j * cellHeight + cellHeight/2);
+                    line.setAttribute('stroke', '#dee2e6');
+                    line.setAttribute('stroke-width', '2');
+                    svg.appendChild(line);
+                }
+            });
+            
+            canvas.appendChild(svg);
+        }
+        
+        function handleNodeClick(node) {
+            if (currentMode === 'start') {
+                selectedStartNode = node;
+                updateNodeStyles();
+                document.getElementById('selectionStatus').textContent = `Start point set to node ${node.id}. Now click "Set Target Point".`;
+                currentMode = null;
+            } else if (currentMode === 'target') {
+                selectedTargetNode = node;
+                updateNodeStyles();
+                document.getElementById('selectionStatus').textContent = `Target point set to node ${node.id}. You can now add actions or set new points.`;
+                currentMode = null;
+            }
+        }
+        
+        function updateNodeStyles() {
+            const nodes = document.querySelectorAll('.node');
+            nodes.forEach(nodeEl => {
+                nodeEl.className = 'node';
+                const nodeId = nodeEl.dataset.nodeId;
+                
+                if (selectedStartNode && nodeId == selectedStartNode.id) {
+                    nodeEl.classList.add('start');
+                }
+                if (selectedTargetNode && nodeId == selectedTargetNode.id) {
+                    nodeEl.classList.add('target');
+                }
+            });
+        }
+        
+        function setStartPoint() {
+            currentMode = 'start';
+            document.getElementById('selectionStatus').textContent = 'Click on a node to set as start point...';
+        }
+        
+        function setTargetPoint() {
+            currentMode = 'target';
+            document.getElementById('selectionStatus').textContent = 'Click on a node to set as target point...';
+        }
+        
+        function clearSelection() {
+            selectedStartNode = null;
+            selectedTargetNode = null;
+            currentMode = null;
+            updateNodeStyles();
+            document.getElementById('selectionStatus').textContent = 'Selection cleared. Set new start and target points.';
+        }
+        
+        function addMoveAction() {
+            if (!selectedTargetNode) {
+                alert('Please select a target node first');
+                return;
+            }
+            
+            const action = {
+                type: 'move',
+                target_node: selectedTargetNode.id,
+                description: `Move to node ${selectedTargetNode.id}`
+            };
+            
+            program.push(action);
+            updateProgramDisplay();
+        }
+        
+        function addLiftUp() {
+            const action = {
+                type: 'lift',
+                lift_action: 'up',
+                description: 'Lift up mechanism'
+            };
+            
+            program.push(action);
+            updateProgramDisplay();
+        }
+        
+        function addLiftDown() {
+            const action = {
+                type: 'lift',
+                lift_action: 'down',
+                description: 'Lift down mechanism'
+            };
+            
+            program.push(action);
+            updateProgramDisplay();
+        }
+        
+        function updateProgramDisplay() {
+            const blocksEl = document.getElementById('programBlocks');
+            
+            if (program.length === 0) {
+                blocksEl.innerHTML = '<div style="text-align: center; color: #6c757d; padding: 40px;">Build your program by selecting points and actions</div>';
+                return;
+            }
+            
+            blocksEl.innerHTML = '';
+            program.forEach((action, index) => {
+                const blockEl = document.createElement('div');
+                blockEl.className = `program-block ${action.type}`;
+                blockEl.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>${index + 1}. ${action.description}</span>
+                        <button class="btn btn-danger" style="padding: 4px 8px; font-size: 12px;" onclick="removeAction(${index})">Remove</button>
+                    </div>
+                `;
+                blocksEl.appendChild(blockEl);
+            });
+        }
+        
+        function removeAction(index) {
+            program.splice(index, 1);
+            updateProgramDisplay();
+        }
+        
+        function clearProgram() {
+            program = [];
+            updateProgramDisplay();
+        }
+        
+        async function saveProgram() {
+            if (program.length === 0) {
+                alert('Program is empty');
+                return;
+            }
+            
+            const programName = prompt('Enter program name:');
+            if (!programName) return;
+            
+            try {
+                const response = await fetch('/api/robot/programs', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: programName,
+                        start_node: selectedStartNode ? selectedStartNode.id : null,
+                        actions: program
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.ok) {
+                    alert('Program saved successfully!');
+                    loadPrograms();
+                } else {
+                    alert('Error saving program: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error saving program: ' + error.message);
+            }
+        }
+        
+        async function executeCurrentProgram() {
+            if (program.length === 0) {
+                alert('Program is empty');
+                return;
+            }
+            
+            try {
+                // Execute current program directly without saving
+                const response = await fetch('/api/robot/execute-current-program', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        start_node: selectedStartNode ? selectedStartNode.id : null,
+                        actions: program
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.ok) {
+                    alert('Current program executed successfully!');
+                } else {
+                    alert('Error executing program: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error executing program: ' + error.message);
+            }
+        }
+        
+        async function executeProgram() {
+            if (program.length === 0) {
+                alert('Program is empty');
+                return;
+            }
+            
+            // Save current program first
+            try {
+                const response = await fetch('/api/robot/programs', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: 'Current Program',
+                        start_node: selectedStartNode ? selectedStartNode.id : null,
+                        actions: program
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.ok) {
+                    // Execute the saved program
+                    const executeResponse = await fetch('/api/robot/execute-program', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            program_id: result.program.id
+                        })
+                    });
+                    
+                    const executeResult = await executeResponse.json();
+                    if (executeResult.ok) {
+                        alert('Program executed successfully!');
+                    } else {
+                        alert('Error executing program: ' + executeResult.error);
+                    }
+                } else {
+                    alert('Error saving program for execution: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error executing program: ' + error.message);
+            }
+        }
+        
+        async function loadPrograms() {
+            try {
+                const response = await fetch('/api/robot/programs');
+                const data = await response.json();
+                displayPrograms(data.programs || []);
+            } catch (error) {
+                console.error('Error loading programs:', error);
+            }
+        }
+        
+        function displayPrograms(programs) {
+            const listEl = document.getElementById('programsList');
+            
+            if (programs.length === 0) {
+                listEl.innerHTML = '<div style="text-align: center; color: #6c757d; padding: 20px;">No saved programs</div>';
+                return;
+            }
+            
+            listEl.innerHTML = '';
+            programs.forEach(program => {
+                const programEl = document.createElement('div');
+                programEl.className = 'program-item';
+                programEl.innerHTML = `
+                    <div>
+                        <strong>${program.name}</strong>
+                        <br><small>Start: ${program.start_node || 'Not set'}</small>
+                        <br><small>Actions: ${program.actions ? program.actions.length : 0}</small>
+                    </div>
+                    <div>
+                        <button class="btn btn-primary" style="padding: 4px 8px; font-size: 12px; margin-right: 5px;" onclick="loadProgram(${program.id})">Load</button>
+                        <button class="btn btn-success" style="padding: 4px 8px; font-size: 12px;" onclick="executeSavedProgram(${program.id})">Run</button>
+                    </div>
+                `;
+                listEl.appendChild(programEl);
+            });
+        }
+        
+        async function loadProgram(programId) {
+            try {
+                const response = await fetch('/api/robot/programs');
+                const data = await response.json();
+                const program = data.programs.find(p => p.id === programId);
+                
+                if (program) {
+                    program = program.actions || [];
+                    selectedStartNode = program.start_node ? graph.nodes.find(n => n.id === program.start_node) : null;
+                    updateProgramDisplay();
+                    updateNodeStyles();
+                    alert('Program loaded!');
+                }
+            } catch (error) {
+                alert('Error loading program: ' + error.message);
+            }
+        }
+        
+        async function executeSavedProgram(programId) {
+            try {
+                const response = await fetch('/api/robot/execute-program', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        program_id: programId
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.ok) {
+                    alert('Program executed successfully!');
+                } else {
+                    alert('Error executing program: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error executing program: ' + error.message);
+            }
+        }
+        
+        async function liftUp() {
+            try {
+                const response = await fetch('/api/robot/lift/up', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                if (result.ok) {
+                    alert('Lift up completed!');
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        async function liftDown() {
+            try {
+                const response = await fetch('/api/robot/lift/down', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                if (result.ok) {
+                    alert('Lift down completed!');
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>
